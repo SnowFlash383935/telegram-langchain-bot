@@ -1,6 +1,6 @@
-aiogram==3.6.0
-langchain==0.2.10
-langchain-openai==0.1.15
-langchain-mcp-adapters==0.1.0
-GitPython==3.1.43
-python-dotenv==1.0.1
+aiogram
+langchain
+langchain-openai
+langchain-mcp-adapters
+GitPython
+python-dotenv
