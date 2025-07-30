@@ -14,6 +14,8 @@ from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain.tools import Tool
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.schema import HumanMessage, AIMessage
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler
+from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
 
@@ -117,5 +119,17 @@ async def answer(msg: Message):
 async def main():
     await dp.start_polling(bot)
 
+PORT = int(os.getenv("PORT", 10000))   # Render injects PORT=10000
+
+async def on_startup(app: web.Application):
+    await bot.set_webhook(f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}")
+
+async def on_shutdown(app: web.Application):
+    await bot.delete_webhook()
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    app = web.Application()
+    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path="/")
+    app.on_startup.append(on_startup)
+    app.on_cleanup.append(on_shutdown)
+    web.run_app(app, host="0.0.0.0", port=PORT)
