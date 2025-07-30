@@ -63,7 +63,7 @@ llm = ChatOpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENAI_KEY,
     model="qwen/qwen3-coder:free",
-    temperature=0
+    temperature=0.6
 )
 
 async def get_tools():
