@@ -126,6 +126,7 @@ async def answer(msg: Message):
 
 # ---------- webhook ----------
 async def on_startup(app: web.Application):
+    await bot.delete_webhook(drop_pending_updates=True)
     await bot.set_webhook(WEBHOOK_URL)
 
 async def on_shutdown(app: web.Application):
