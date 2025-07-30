@@ -16,6 +16,7 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.schema import HumanMessage, AIMessage
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler
 from aiohttp import web
+from aiogram.filters import Command
 
 logging.basicConfig(level=logging.INFO)
 
@@ -89,6 +90,18 @@ async def cmd_start(msg: Message):
         await msg.answer("Доступ запрещён.")
         return
     await msg.answer("Привет! Пиши, я рядом.")
+
+@dp.message(Command("clear"))
+async def cmd_clear(msg: Message):
+    user = msg.from_user.username
+    if user not in ALLOWED_USERS:
+        return
+    # стираем локальный файл
+    (REPO_DIR / f"{user}.jsonl").unlink(missing_ok=True)
+    # пустой коммит, чтобы удаление отобразилось
+    repo.index.commit(f"{user}: history cleared")
+    repo.remotes.origin.push()
+    await msg.answer("📑 История удалена и отправлена в Git.")
 
 @dp.message()
 async def answer(msg: Message):
