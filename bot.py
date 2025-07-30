@@ -1,22 +1,22 @@
-from dotenv import load_dotenv
-load_dotenv()
-
-import os, json, asyncio, logging
+import os, json, logging, asyncio
 from pathlib import Path
 from typing import List
 import git
+from dotenv import load_dotenv   # <- добавлено
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler
+from aiohttp import web
 from langchain_openai import ChatOpenAI
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain.tools import Tool
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.schema import HumanMessage, AIMessage
-from aiogram.filters import Command
 
-logging.basicConfig(level=logging.INFO)
+# ---------- загружаем .env ----------
+load_dotenv()   # <-- ключевая строка
 
 # ---------- конфиг ----------
 BOT_TOKEN      = os.getenv("BOT_TOKEN")
@@ -25,7 +25,13 @@ GIT_REPO_URL   = os.getenv("GIT_REPO_URL")
 GIT_TOKEN      = os.getenv("GIT_TOKEN")
 ALLOWED_USERS  = set(os.getenv("ALLOWED_USERS", "").split(","))
 
+PORT = int(os.getenv("PORT", 10000))
+WEBHOOK_PATH = f"/{BOT_TOKEN}"
+WEBHOOK_URL  = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME', 'localhost')}{WEBHOOK_PATH}"
+
 REPO_DIR = Path("repo")
+
+logging.basicConfig(level=logging.INFO)
 
 # ---------- Git helper ----------
 def init_repo():
@@ -46,9 +52,8 @@ def save_history(user: str, messages: List[dict]):
         for m in messages:
             f.write(json.dumps(m, ensure_ascii=False) + "\n")
     repo.index.add([str(file)])
-    repo.index.commit(f"update {user}")
-    origin = repo.remote(name="origin")
-    origin.push()
+    repo.index.commit(f"{user}: update")
+    repo.remotes.origin.push()
 
 def load_history(user: str) -> List[dict]:
     file = REPO_DIR / f"{user}.jsonl"
@@ -62,14 +67,12 @@ llm = ChatOpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENAI_KEY,
     model="qwen/qwen3-coder:free",
-    temperature=0.6
+    temperature=0
 )
 
 async def get_tools():
-    # Пока пусто, добавляй MCP-сервера по аналогии
-    client = MultiServerMCPClient({})
-    mcp_tools = await client.get_tools()
-    return mcp_tools
+    client = MultiServerMCPClient({})   # место для MCP-серверов
+    return await client.get_tools()
 
 prompt = ChatPromptTemplate.from_messages([
     ("system", "Ты полезный русскоязычный ассистент."),
@@ -80,23 +83,20 @@ prompt = ChatPromptTemplate.from_messages([
 
 # ---------- aiogram ----------
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+dp  = Dispatcher()
 
 @dp.message(CommandStart())
 async def cmd_start(msg: Message):
     if msg.from_user.username not in ALLOWED_USERS:
-        await msg.answer("Доступ запрещён.")
-        return
-    await msg.answer("Привет! Пиши, я рядом.")
+        return await msg.answer("Access denied.")
+    await msg.answer("👋 Привет! Пиши, я рядом.")
 
 @dp.message(Command("clear"))
 async def cmd_clear(msg: Message):
     user = msg.from_user.username
     if user not in ALLOWED_USERS:
         return
-    # стираем локальный файл
     (REPO_DIR / f"{user}.jsonl").unlink(missing_ok=True)
-    # пустой коммит, чтобы удаление отобразилось
     repo.index.commit(f"{user}: history cleared")
     repo.remotes.origin.push()
     await msg.answer("📑 История удалена и отправлена в Git.")
@@ -105,30 +105,38 @@ async def cmd_clear(msg: Message):
 async def answer(msg: Message):
     user = msg.from_user.username
     if user not in ALLOWED_USERS:
-        await msg.answer("Доступ запрещён.")
         return
 
     history_raw = load_history(user)
-    history = [HumanMessage(m["content"]) if m["role"]=="user" else AIMessage(m["content"])
+    history = [HumanMessage(m["content"]) if m["role"] == "user" else AIMessage(m["content"])
                for m in history_raw]
 
     tools = await get_tools()
     agent = create_openai_tools_agent(llm, tools, prompt)
     executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
 
-    # стримим
     answer_text = ""
     async for chunk in executor.astream({"input": msg.text, "history": history}):
         if chunk.get("output"):
             answer_text += chunk["output"]
     await msg.answer(answer_text)
 
-    # сохраняем
-    save_history(user, [{"role":"user","content":msg.text},
-                        {"role":"assistant","content":answer_text}])
+    save_history(user, [{"role": "user", "content": msg.text},
+                        {"role": "assistant", "content": answer_text}])
 
-async def main():
-    await dp.start_polling(bot)
+# ---------- webhook ----------
+async def on_startup(app: web.Application):
+    await bot.set_webhook(WEBHOOK_URL)
+
+async def on_shutdown(app: web.Application):
+    await bot.delete_webhook()
+
+def create_app() -> web.Application:
+    app = web.Application()
+    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
+    app.on_startup.append(on_startup)
+    app.on_cleanup.append(on_shutdown)
+    return app
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    web.run_app(create_app(), host="0.0.0.0", port=PORT)
