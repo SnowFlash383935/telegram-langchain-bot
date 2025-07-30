@@ -135,6 +135,8 @@ async def on_shutdown(app: web.Application):
 def create_app() -> web.Application:
     app = web.Application()
     SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
+    app.router.add_get("/", lambda req: web.Response(text="Telegram Bot"))
+    app.router.add_get("/health", lambda req: web.Response(text="healthy"))
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_shutdown)
     return app
